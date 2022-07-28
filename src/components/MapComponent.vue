@@ -14,15 +14,15 @@ import polylabel from "polylabel";
 export default {
   name: "MapComponent",
   mounted: function () {
-    var HoverFeatureId = null
-    const mapStyle = 'http://192.168.24.120/style.json';
+    let HoverFeatureId = null
 
+    //создание map
+    const mapStyle = 'http://192.168.24.120/style.json';
     const initialState = {
       lng:   44.516976,
       lat: 48.707065,
       zoom: 20
     }
-
     const map = new maplibre.Map({
       container: "map",
       style: `${mapStyle}`,
@@ -35,7 +35,7 @@ export default {
     map.showTileBoundaries = true;
 
 
-
+   //создание map draw
     const modes = MapboxDraw.modes
     modes.passing_mode_polygon = mapboxGlDrawPassingMode(
         MapboxDraw.modes.draw_polygon
@@ -50,13 +50,12 @@ export default {
         trash:true,
         //CutPolygon
         point:true,
-        combine_features:true,
-        uncombine_features:true,
 
       },
       userProperties:true,
     });
 
+    //динамические точки с api
     async function postGetMarkers(center,zoom){
       const responce = await fetch("http://192.168.25.107:3000/getmarkers", {method:"POST",headers: {
           'Accept': 'application/json',
@@ -93,7 +92,7 @@ export default {
     }
     async function animate(jsonData, j, i, data) {
       const positions = []
-      const n = 15
+      const n = 30
       const start = jsonData.features[j].geometry.coordinates
 
       const end = [data.markers[j].positions[i].lng,data.markers[j].positions[i].lat]
@@ -110,11 +109,11 @@ export default {
         }, pos * 1000/n)
       }
     }
-
     setInterval(() => {
       getMarkers()
     }, 3000)
 
+    //проверка feature нужен ли ему маркер при нажатии
     function checkFeatures(features){
       const listLayers = ["place_label_city", "building"]
       for(let e in features){
@@ -124,6 +123,7 @@ export default {
       }
       return undefined
     }
+    //добавление всех иконок с сервера P.S. название = layer name
     function addMapImages(){
       const listImages = [{"layer_id":"building","href":"building.png"},{"layer_id":"place_label_city","href":"place_label_city.png"}]
       listImages.forEach((el)=>{
@@ -133,15 +133,17 @@ export default {
         })
       })
     }
+    //Вычесление точки для маркера
     function averagePosition(geometry){
       const centroid = polylabel(geometry)
       return [centroid[0],centroid[1]]
     }
+    //анимация появления маркера
     async function animationCreateMarker(){
       let start = Date.now(); // запомнить время начала
 
       let timer = setInterval(async function() {
-        // сколько времени прошло с начала анимации?
+        // сколько времени прошло с начала анимации
         let timePassed = Date.now() - start;
 
         if (timePassed >= 200) {
@@ -157,34 +159,60 @@ export default {
     async function drawAnimation(timePassed) {
       map.setLayoutProperty("onclick-image","icon-size",timePassed / 800)
     }
+    //выделение здания при нажатии
     function setHoverEffect(e){
       removeHoverEffect()
-      HoverFeatureId = map.queryRenderedFeatures(e.point)[0].id
-      map.setFeatureState({source:"osm",sourceLayer:"building",id:HoverFeatureId}, {hover:true})
+      map.queryRenderedFeatures(e.point).forEach((feature)=>{
+        if(feature.layer.id === "building"){
+          HoverFeatureId = feature.id
+          map.setFeatureState({source:"osm",sourceLayer:"building",id:HoverFeatureId}, {hover:true})
+        }
+      })
     }
+    //удаление выделения здания
     function removeHoverEffect(){
       if(HoverFeatureId){
         map.removeFeatureState({source:"osm",sourceLayer:"building",id:HoverFeatureId})
       }
     }
-    function createMarker(layerId,jsonDataPoint){
+
+    function setDataMarker(layerId,jsonDataPoint){
       map.setLayoutProperty("onclick-image","icon-image",layerId)
       map.setLayoutProperty("onclick-image","icon-size",0)
       map.getSource('onclick-point').setData(jsonDataPoint)
     }
+    //создание маркера
+    async function createMarker(e){
+      if (draw.getMode() === "simple_select"){
+        const jsonDataPoint = {"type":"FeatureCollection","features":[]}
+        let feature = checkFeatures(map.queryRenderedFeatures(e.point))
 
+        if (feature){
+          const layerId = feature.layer.id
+          const markerCoodinates = (feature.geometry.type === "Point"? feature.geometry.coordinates : averagePosition(feature.geometry.coordinates))
+          if (markerCoodinates){
+            jsonDataPoint.features = [{"type":"Feature","geometry":{"type":"Point", "coordinates":markerCoodinates}}]
+            setDataMarker(layerId,jsonDataPoint)
+            await animationCreateMarker()
+          }
+        }else {
+          map.getSource('onclick-point').setData(jsonDataPoint)
+        }
+      }
+    }
 
     map.on('load', function () {
-
-      map.resize()
       addMapImages()
+
+      //загрузка картинки для динамических точек
+      //TODO: перенести картинку на сервер
       map.loadImage(alien,async (error,image)=>{
         if(error) throw error;
         map.addImage("marker",image)
       })
 
+      //создание истоника, слоев для динамических точек
       map.addSource("points",{"type":"geojson", "data":{"type":"FeatureCollection","features":[]}})
-      map.addSource("onclick-point", {"type":"geojson","data":{"type":"FeatureCollection","features":[]}})
       map.addLayer({
         'id': 'points-image',
         "type": 'symbol',
@@ -210,6 +238,9 @@ export default {
           'circle-stroke-color': '#000000'
         }
       })
+
+      //создание источника, слоя для маркера
+      map.addSource("onclick-point", {"type":"geojson","data":{"type":"FeatureCollection","features":[]}})
       map.addLayer({
         'id': 'onclick-image',
         "type": 'symbol',
@@ -224,162 +255,25 @@ export default {
         }
       })
 
+      //добавление кнопок draw
       map.addControl(draw,"top-left")
-
-
-      // map.addLayer({
-      //   id: "polygon",
-      //   type: "fill",
-      //   source: {
-      //     type: "geojson",
-      //     data: {"type":"FeatureCollection","features":[{
-      //         type: "Feature",
-      //         geometry: {
-      //           type: "MultiPolygon",
-      //           coordinates: [
-      //             [
-      //               [
-      //                 [
-      //                   115.813867,
-      //                   -31.932177
-      //                 ],
-      //                 [
-      //                   115.813867,
-      //                   -31.932177
-      //                 ],
-      //                 [
-      //                   115.813867,
-      //                   -31.932087
-      //                 ],
-      //                 [
-      //                   115.813962,
-      //                   -31.932087
-      //                 ],
-      //                 [
-      //                   115.813962,
-      //                   -31.932124
-      //                 ],
-      //                 [
-      //                   115.814005,
-      //                   -31.932124
-      //                 ],
-      //                 [
-      //                   115.814005,
-      //                   -31.932168
-      //                 ],
-      //                 [
-      //                   115.813962,
-      //                   -31.932168
-      //                 ],
-      //                 [
-      //                   115.813962,
-      //                   -31.932177
-      //                 ],
-      //                 [
-      //                   115.813867,
-      //                   -31.932177
-      //                 ]
-      //               ],
-      //               [
-      //                 [
-      //                   115.813962,
-      //                   -31.932087
-      //                 ],
-      //                 [
-      //                   115.813894,
-      //                   -31.932087
-      //                 ],
-      //                 [
-      //                   115.813894,
-      //                   -31.932042
-      //                 ],
-      //                 [
-      //                   115.81391,
-      //                   -31.932042
-      //                 ],
-      //                 [
-      //                   115.81391,
-      //                   -31.931967
-      //                 ],
-      //                 [
-      //                   115.813984,
-      //                   -31.931967
-      //                 ],
-      //                 [
-      //                   115.813984,
-      //                   -31.932042
-      //                 ],
-      //                 [
-      //                   115.81401,
-      //                   -31.932042
-      //                 ],
-      //                 [
-      //                   115.81401,
-      //                   -31.932087
-      //                 ],
-      //                 [
-      //                   115.813962,
-      //                   -31.932087
-      //                 ]
-      //               ],
-      //
-      //             ]
-      //           ]
-      //         }
-      //       }
-      //       ]}
-      //   },
-      //   layout: {},
-      //   paint: {
-      //     "fill-color": "red",
-      //     "fill-opacity": 1
-      //   }
-      // })
-
     })
+    //клик
     map.on("click",async function (e) {
-      console.log(map.queryRenderedFeatures(e.point))
-      removeHoverEffect()
-      if (draw.getMode() === "simple_select"){
-        const jsonDataPoint = {"type":"FeatureCollection","features":[]}
-        const jsonDataPolygon = {"type":"Feature","geometry":{"type":"Polygon","coordinates":[]}}
-        let feature = checkFeatures(map.queryRenderedFeatures(e.point))
-        if (feature){
-          const layerId = feature.layer.id
-          if(feature.geometry.type === "Point"){
-            jsonDataPoint.features = [{"type":"Feature","geometry":{"type":"Point", "coordinates":feature.geometry.coordinates}}]
-            createMarker(layerId,jsonDataPoint)
-            await animationCreateMarker()
-          }
-          if(feature.geometry.type === "Polygon"){
-            jsonDataPolygon.geometry = feature.geometry
-            jsonDataPoint.features = [{"type":"Feature","geometry":{"type":"Point", "coordinates":averagePosition(feature.geometry.coordinates)}}]
-            createMarker(layerId,jsonDataPoint)
-            await animationCreateMarker()
-          }
+      await removeHoverEffect()
+      await createMarker(e)
 
-
-
-        }else {
-          map.getSource('onclick-point').setData(jsonDataPoint)
-        }
-      }
-
-
-
-      // hoveredStateId = e.features[0].id;
-      // console.log(hoveredStateId)
-      // map.setFeatureState(
-      //     {source: 'osm', sourceLayer: "place_label", id: hoveredStateId},
-      //     {hover: true}
-      // );
     })
+
+    //клик на здание
     map.on("click","building",async (e)=>{
       if (draw.getMode() === "simple_select"){
         await setHoverEffect(e)
       }
 
     })
+
+    //debug
     map.on("mousemove", function (e) {
 
       const features = map.queryRenderedFeatures(e.point)
